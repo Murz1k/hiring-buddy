@@ -1,0 +1,30 @@
+<h1>Поиск кандидатов</h1>
+
+<nz-input-group nzSearch nzSize="large" [nzAddOnAfter]="suffixButton">
+  <input type="text" nz-input placeholder="Введите ключевые навыки" [(ngModel)]="searchQuery"/>
+</nz-input-group>
+<ng-template #suffixButton>
+  <button nz-button nzType="primary" nzSize="large" nzSearch (click)="onSearch()">Найти</button>
+</ng-template>
+
+<nz-table #basicTable [nzData]="resumes"
+          [nzFrontPagination]="false"
+          [nzPageSize]="pageSize"
+          [(nzPageIndex)]="pageIndex"
+          [nzTotal]="total"
+          (nzPageIndexChange)="onChangePage($event)">
+  <thead>
+  <tr>
+    <th>Id</th>
+    <th>Заголовок</th>
+    <th>Имя</th>
+  </tr>
+  </thead>
+  <tbody>
+  <tr *ngFor="let data of basicTable.data">
+    <td><a href="https://hh.ru/resume/{{data.id}}" target="_blank">{{data.id}}</a></td>
+    <td>{{data.title}}</td>
+    <td>{{data.fullName}}</td>
+  </tr>
+  </tbody>
+</nz-table>

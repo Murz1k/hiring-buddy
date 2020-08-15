@@ -3,6 +3,7 @@ import { AngularUniversalModule } from '@nestjs/ng-universal';
 import { join } from 'path';
 import { OrdersModule } from './src/orders/orders.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ResumesModule } from './src/resumes/resumes.module';
 
 @Module({
   imports: [
@@ -21,7 +22,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
       entities: ['dist/**/*.entity{.ts,.js}'],
       synchronize: true
     }),
-    OrdersModule
+    OrdersModule,
+    ResumesModule
   ]
 })
 export class ApplicationModule {}
