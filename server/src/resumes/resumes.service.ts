@@ -1,11 +1,12 @@
-import { HttpService, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Order } from '../orders/order.entity';
 import { Browser, Page } from 'puppeteer';
 
 const cheerio = require('cheerio');
 import { createBrowser, createPage, tryNavigate } from '../puppeteer-extension';
-import { BehaviorSubject, forkJoin, from, iif, interval, of, Subject } from 'rxjs';
-import { bufferCount, filter, first, map, pluck, scan, share, shareReplay, switchMap, take, tap, withLatestFrom } from 'rxjs/operators';
+import { BehaviorSubject, forkJoin, from, interval, Subject } from 'rxjs';
+import { bufferCount, filter, map, scan, share, switchMap, take, tap } from 'rxjs/operators';
+import { GetResumeListRequest, HhHelper } from '../helpers/hh.helper';
 
 const MAX_PAGES = 4;
 const MAX_BROWSERS = 4;
@@ -133,67 +134,43 @@ export class ResumesService {
    * Возвращает все проекты с сайта https://fl.ru по заданным фильтрам
    * @param search Объект с фильтрами
    */
-  getVacancies = async (search: { words: string | string[] | any, minBudget?: number, isDebug?: boolean | string, maxBudget?: number, withoutContractor?: boolean }): Promise<{ items: any[] }> => {
+  getVacancies = async (search: { words: string | string[] | any, pageIndex: number, pageSize: number, minBudget?: number, isDebug?: boolean | string, maxBudget?: number, withoutContractor?: boolean }): Promise<{ items: any[] }> => {
 
     try {
       // TODO Использовать https://hackernoon.com/tips-and-tricks-for-web-scraping-with-puppeteer-ed391a63d952
-      if (!this._browser) {
-        this._browser = await createBrowser();
-      }
-      let pageUrl = 'https://hh.ru/search/vacancy';
       const text = 'angular';
-      const experience = ''; // 'between1And3';
-      const employment = ''; // 'full';
-      const schedule = ''; // 'fullDay';
 
-      pageUrl += `?text=${text}&experience=${experience}&employment=${employment}&schedule=${schedule}`;
+      const hh = new HhHelper();
 
-      const page = await createPage(this._browser, true);
-      await tryNavigate(page, pageUrl);
+      const resource1 = await this.getFreeResource();
+      const vacancies1 = await hh.getVacanciesList(resource1.page, {text, page: 0});
+      this.clearResource(resource1);
+      let skills = await Promise.all(
+        vacancies1.vacancies.map(async vacancy => {
+          const resumeResource = await this.getFreeResource();
+          const fullVacancy = await hh.getVacancyById(resumeResource.page, vacancy.id);
+          this.clearResource(resumeResource);
 
-      const totalPages = await page.evaluate(() => {
-        // @ts-ignore
-        return +Array.from(document.querySelectorAll('[data-page]')).splice(-2).map(p => p.innerText)[0];
-      });
+          return fullVacancy.skills;
+        })
+      );
+      console.log(`Всего страниц: ${vacancies1.totalPages}`);
 
-      console.log(`Всего страниц: ${totalPages}`);
-
-      let skills = [];
-      for (let pageIndex = 0; pageIndex < +totalPages; pageIndex++) {
+      for (let pageIndex = 1; pageIndex < vacancies1.totalPages; pageIndex++) {
         console.log(`${new Date().toLocaleString()}: Скрабим страницу ${pageIndex}`);
-        if (pageIndex) {
-          await tryNavigate(page, pageUrl += `&page=${pageIndex}`);
-        }
 
-        const vacancyIds = await page.evaluate(() => {
-          return Array.from(document.querySelectorAll('[data-qa=\'vacancy-serp__vacancy-title\']')).map(vacancy => {
-            // @ts-ignore
-            return vacancy.href.split('?')[0].split('/').slice(-1).join('');
-          });
-        });
-        const temp = [];
+        const resource = await this.getFreeResource();
+        const vacancies = await hh.getVacanciesList(resource.page, {text, page: pageIndex});
+        this.clearResource(resource);
+        const skillArrays = await Promise.all(
+          vacancies.vacancies.map(async vacancy => {
+            const resumeResource = await this.getFreeResource();
+            const fullVacancy = await hh.getVacancyById(resumeResource.page, vacancy.id);
+            this.clearResource(resumeResource);
 
-        try {
-          // @ts-ignore
-          for (let i = 0; i < vacancyIds.length; i += MAX_PAGES) {
-            const ids = vacancyIds.splice(i, MAX_PAGES);
-            temp.push([ids]);
-          }
-        } catch (e) {
-
-        }
-        const skillArrays = [];
-        try {
-          for (let i = 0; i < temp.length; i++) {
-            for (let j = 0; j < temp[i].length; j++) {
-              const newSkills = await Promise.all(temp[i][j].map(vacancy => this._getSkillsByVacancyId(vacancy)));
-              console.log(newSkills);
-              skillArrays.push(...newSkills);
-            }
-          }
-        } catch (e) {
-          console.log(e);
-        }
+            return fullVacancy.skills;
+          })
+        );
 
         skills = [...skills, ...skillArrays];
       }
@@ -218,7 +195,7 @@ export class ResumesService {
         return 0;
       });
 
-      console.log(temp2.slice(0, 20));
+      // console.log(temp2.slice(0, 20));
       return {
         items: temp2
       };
@@ -332,73 +309,45 @@ export class ResumesService {
     }
   };
 
-  private async _getSkillsByVacancyId(vacancyId: string): Promise<string[]> {
-    const page = await createPage(this._browser, true);
-    // let obj;
-    // if (pages.length < MAX_PAGES) {
-    //   pages.push({page: await createPage(this._browser, true), free: true});
-    // } else {
-    //   obj = pages.find(i => i.free);
-    //   obj.free = false;
-    // }
-    await tryNavigate(page, `https://krasnodar.hh.ru/vacancy/${vacancyId}`);
-    const result = await page.evaluate(() => {
-      // @ts-ignore
-      return Array.from(document.querySelectorAll('[data-qa=\'bloko-tag__text\']')).map(b => b.innerText);
-    });
-
-    setTimeout(() => page.close(), 5000);
-
-    // obj.free = true;
-
-    return result;
-  }
-
-  private async _getResumeById(resumeId: string): Promise<Resume> {
-    const resource = await this.getFreeResource();
-    await tryNavigate(resource.page, `https://krasnodar.hh.ru/resume/${resumeId}`);
-    const content = await resource.page.content();
-    this.clearResource(resource);
-    console.log(`Читаем контент: ${resumeId}`);
-    const $ = cheerio.load(content);
-
-    const fullName = $('[data-qa=\'resume-personal-name\'] span').text();
-    const title = $('[data-qa=\'resume-block-title-position\'] span').text();
-
-    const obj = {id: resumeId, title, fullName} as Resume;
-
-    this.cacheBufferSubject.next([obj]);
-
-    return obj;
-  }
-
   private async parsingResumesPage(pageIndex = 0, pageUrl: string): Promise<Resume[]> {
     console.log(`${new Date().toLocaleString()}: Скрабим страницу ${pageIndex}`);
 
-    const resource = await this.getFreeResource();
-    await tryNavigate(resource.page, pageUrl += `&page=${pageIndex}`);
-    const content = await resource.page.content();
-    this.clearResource(resource);
-    const $ = cheerio.load(content);
+    const hh = new HhHelper();
 
-    const shortResume = $('[data-qa=\'resume-serp__resume-title\']').get().map(resume => {
-        const resumeId = $(resume).attr('href').split('?')[0].split('/').slice(-1).join('');
-        const title = $(resume).text();
-        return {
-          resumeId,
-          title
-        };
-      }
-    );
+    const resource = await this.getFreeResource();
+
+    const request: GetResumeListRequest = {
+      clusters: true,
+      exp_period: 'all_time',
+      area: 1,
+      logic: 'normal',
+      no_magic: false,
+      order_by: 'relevance',
+      pos: 'full_text',
+      text: 'angular',
+      page: pageIndex
+    };
+    const resumeList = await hh.getResumeList(resource.page, request);
+    this.clearResource(resource);
+
+    const filteredResumeList = resumeList.resumes
+      .filter(resume =>
+        this.OROperators(resume.title, 'developer', 'программист', 'разработчик', 'developer')
+        && this.NOTOperators(resume.title, 'php', 'верстальщик', 'ruby', 'junior', 'стажер', 'vue', 'react')
+      );
 
     let skillArrays: Resume[] = [];
     try {
       skillArrays = await Promise.all(
-        shortResume
-          .filter(resume =>
-            this.OROperators(resume.title, 'developer', 'программист', 'разработчик', 'developer')
-            && this.NOTOperators(resume.title, 'php', 'верстальщик', 'ruby', 'junior', 'стажер', 'vue', 'react')
-          ).map(resume => this._getResumeById(resume.resumeId))
+        filteredResumeList.map(async resume => {
+          const resumeResource = await this.getFreeResource();
+          const fullResume = await hh.getResumeById(resumeResource.page, resume.resumeId);
+          this.clearResource(resumeResource);
+
+          this.cacheBufferSubject.next([fullResume]);
+
+          return fullResume;
+        })
       );
     } catch (e) {
       console.log(e);
